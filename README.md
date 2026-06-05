@@ -3,7 +3,7 @@ use Debian 13.5 and configure Workstation spécial
 
 # new script to install mame emulator for IRIX 5.3 and 6.
 
-enter deian using local user (administrateur for me )
+enter debian using local user (administrateur for me )
 
 download file: https://github.com/msartor99/Debian13/blob/5887f1a66c904ba0fe74ca650c2461c794ffcd1a/install_mame.sh
 
