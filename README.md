@@ -9,6 +9,6 @@ download file: https://github.com/msartor99/Debian13/blob/5887f1a66c904ba0fe74ca
 
 make it executable : chmod +x install_mame.sh
 
-you must found irix65.chd and indy_4610.zip on the net ( archives.org ) and copy files to /home/administrateur
+you must found irix65.chd, ps2_keybc.zip and indy_4610.zip on the net ( archives.org ) and copy files to /home/administrateur
 
 open terminal and run it : sudo ./install_mame.sh
