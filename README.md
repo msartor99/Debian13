@@ -9,4 +9,4 @@ make it executable : chmod +x install_mame.sh
 
 you must found irix65.chd and indy_4610.zip onn the net ( archives.org ) and copy files to /home/administrateur
 
-open terminal and run it ./install_mame.sh
+open terminal and run it : sudo ./install_mame.sh
