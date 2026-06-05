@@ -1,6 +1,6 @@
 #!/bin/bash
 # Kiosk SGI & VM Mac Installer (Debian GNOME Standard Desktop)
-# VERSION 22 : LOCAL FILES AUTO-MOVE / INDY_4610
+# VERSION 23 : FULL AUTO-MANAGEMENT (7Z EXTRACTION + ROMS PLACEMENT)
 # Must be executed as root (via su -) on Debian 13.5
 
 set -Eeuo pipefail
@@ -58,7 +58,8 @@ apt update && apt upgrade -y
 log_status "Repositories updated"
 
 echo "=== 2. Installing Emulation Tools & Dependencies ==="
-apt install -y mame wget curl alsa-utils zenity sudo \
+# Ajout de p7zip-full pour pouvoir extraire irix65.7z
+apt install -y mame wget curl alsa-utils zenity sudo p7zip-full \
                intel-microcode qemu-system-x86 ovmf xrdp xorgxrdp openssh-server \
                virt-manager libvirt-daemon-system libvirt-clients qemu-utils swtpm
 log_status "Dependencies installed"
@@ -76,14 +77,29 @@ mkdir -p "$REAL_HOMEDIR/.mame/roms" "$REAL_HOMEDIR/.mame/chd" "$REAL_HOMEDIR/.ma
 mkdir -p "$REAL_HOMEDIR/Virtual_Machines" "$REAL_HOMEDIR/.macvm"
 mkdir -p "$REAL_HOMEDIR/Desktop" "$REAL_HOMEDIR/Bureau" "$REAL_HOMEDIR/.local/share/applications"
 
-echo "=== 5. Moving Local Files to MAME Directories ==="
-# Déplacement automatique du BIOS 4610
-if [ -f "$REAL_HOMEDIR/indy_4610.zip" ]; then
-    mv "$REAL_HOMEDIR/indy_4610.zip" "$REAL_HOMEDIR/.mame/roms/"
-    echo "[i] BIOS indy_4610.zip moved to .mame/roms/"
+echo "=== 5. Processing Local Files (ROMS & CHD) ==="
+# Déplacement des puces BIOS et Contrôleurs
+for rom in indy_4610.zip kb_ms_natural.zip ps2_keybc.zip; do
+    if [ -f "$REAL_HOMEDIR/$rom" ]; then
+        mv "$REAL_HOMEDIR/$rom" "$REAL_HOMEDIR/.mame/roms/"
+        echo "[i] Moved $rom to .mame/roms/"
+    fi
+done
+
+# Extraction du disque dur compressé .7z
+if [ -f "$REAL_HOMEDIR/irix65.7z" ]; then
+    echo "[i] Extracting irix65.7z (This may take a few minutes)..."
+    # Extrait tous les fichiers .chd de l'archive directement dans le bon dossier
+    7z e "$REAL_HOMEDIR/irix65.7z" -o"$REAL_HOMEDIR/.mame/chd/" "*.chd" -r -y > /dev/null
+    echo "[i] Extraction complete."
+    
+    # Renomme le fichier extrait en irix65.chd pour être sûr que le lanceur le trouve
+    if ls "$REAL_HOMEDIR/.mame/chd/"*.chd 1> /dev/null 2>&1; then
+        mv "$REAL_HOMEDIR/.mame/chd/"*.chd "$REAL_HOMEDIR/.mame/chd/irix65.chd" 2>/dev/null || true
+    fi
 fi
 
-# Déplacement automatique du disque dur IRIX 6.5
+# Déplacement si le fichier CHD était déjà extrait à la racine
 if [ -f "$REAL_HOMEDIR/irix65.chd" ]; then
     mv "$REAL_HOMEDIR/irix65.chd" "$REAL_HOMEDIR/.mame/chd/"
     echo "[i] Hard drive irix65.chd moved to .mame/chd/"
@@ -96,7 +112,7 @@ fi
 
 echo "=== 7. Configuring MAME Audio ==="
 cat << 'EOF' > "$REAL_HOMEDIR/.mame/ini/mame.ini"
-sound                 alsa
+sound                 auto
 audio_latency         3
 EOF
 
@@ -116,8 +132,8 @@ CHOICE=\$(zenity --list \\
 
 case "\$CHOICE" in
     1) 
-        # Lancement avec la rom indy_4610
-        /usr/games/mame indy_4610 -sound alsa -hard1 "$REAL_HOMEDIR/.mame/chd/irix65.chd" 
+        # Lancement avec la rom indy_4610 (sans l'option -sound alsa obsolète)
+        /usr/games/mame indy_4610 -hard1 "$REAL_HOMEDIR/.mame/chd/irix65.chd" 
         ;;
     2) 
         if [ -f "$REAL_HOMEDIR/.macvm/OpenCore.qcow2" ]; then
