@@ -1,6 +1,6 @@
 #!/bin/bash
 # Kiosk SGI & VM Mac Installer (Debian GNOME Standard Desktop)
-# VERSION 20 : UNIVERSAL / OPTIONAL REBOOT / IDEMPOTENT
+# VERSION 22 : LOCAL FILES AUTO-MOVE / INDY_4610
 # Must be executed as root (via su -) on Debian 13.5
 
 set -Eeuo pipefail
@@ -31,17 +31,14 @@ echo "=========================================================="
 echo "   START : SYSTEM CONFIGURATION (STANDARD GNOME)          "
 echo "=========================================================="
 
-# Ensure script is run as root
 if [ "$EUID" -ne 0 ]; then
     echo "[-] Error: This script must be run as root (use 'su -')." >&2
     exit 1
 fi
 
-# Define target user (change "administrateur" if needed)
 REAL_USER="administrateur"
 REAL_HOMEDIR="/home/$REAL_USER"
 
-# Verify if target user exists
 if ! id "$REAL_USER" &>/dev/null; then
     echo "[-] Error: User '$REAL_USER' does not exist."
     exit 1
@@ -61,56 +58,68 @@ apt update && apt upgrade -y
 log_status "Repositories updated"
 
 echo "=== 2. Installing Emulation Tools & Dependencies ==="
-# GNOME is already installed, fetching only emulation and remote access packages
 apt install -y mame wget curl alsa-utils zenity sudo \
                intel-microcode qemu-system-x86 ovmf xrdp xorgxrdp openssh-server \
                virt-manager libvirt-daemon-system libvirt-clients qemu-utils swtpm
 log_status "Dependencies installed"
 
 echo "=== 3. Configuring System Permissions ==="
-# Granting virtualization and hardware access to the main user
-usermod -aG kvm,libvirt,audio,video "$REAL_USER"
-log_status "Permissions granted to $REAL_USER"
+for group in kvm libvirt audio video; do
+    if getent group "$group" > /dev/null 2>&1; then
+        /usr/sbin/usermod -aG "$group" "$REAL_USER"
+    fi
+done
+log_status "Permissions verified"
 
 echo "=== 4. Creating Directory Structure ==="
 mkdir -p "$REAL_HOMEDIR/.mame/roms" "$REAL_HOMEDIR/.mame/chd" "$REAL_HOMEDIR/.mame/ini"
 mkdir -p "$REAL_HOMEDIR/Virtual_Machines" "$REAL_HOMEDIR/.macvm"
 mkdir -p "$REAL_HOMEDIR/Desktop" "$REAL_HOMEDIR/Bureau" "$REAL_HOMEDIR/.local/share/applications"
 
-echo "=== 5. Preparing Mac OS X NVRAM ==="
-# Copies the blank UEFI firmware needed for macOS virtualization
+echo "=== 5. Moving Local Files to MAME Directories ==="
+# Déplacement automatique du BIOS 4610
+if [ -f "$REAL_HOMEDIR/indy_4610.zip" ]; then
+    mv "$REAL_HOMEDIR/indy_4610.zip" "$REAL_HOMEDIR/.mame/roms/"
+    echo "[i] BIOS indy_4610.zip moved to .mame/roms/"
+fi
+
+# Déplacement automatique du disque dur IRIX 6.5
+if [ -f "$REAL_HOMEDIR/irix65.chd" ]; then
+    mv "$REAL_HOMEDIR/irix65.chd" "$REAL_HOMEDIR/.mame/chd/"
+    echo "[i] Hard drive irix65.chd moved to .mame/chd/"
+fi
+
+echo "=== 6. Preparing Mac OS X NVRAM ==="
 if [ ! -f "$REAL_HOMEDIR/.macvm/OVMF_VARS_4M.fd" ]; then
     cp /usr/share/OVMF/OVMF_VARS_4M.fd "$REAL_HOMEDIR/.macvm/OVMF_VARS_4M.fd"
 fi
 
-echo "=== 6. Configuring MAME Audio ==="
+echo "=== 7. Configuring MAME Audio ==="
 cat << 'EOF' > "$REAL_HOMEDIR/.mame/ini/mame.ini"
 sound                 alsa
 audio_latency         3
 EOF
 
-echo "=== 7. Creating the UI Launcher Script ==="
-# This script spawns the Zenity GUI to select a machine to run
+echo "=== 8. Creating the UI Launcher Script ==="
 cat << EOF > "$REAL_HOMEDIR/system-launcher.sh"
 #!/bin/bash
-# Disable GNOME screensaver while the emulator is running
 gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null || true
 
-CHOICE=\$(zenity --list --center \\
+CHOICE=\$(zenity --list \\
                 --title "Multi-System Launcher" \\
                 --text "Select the environment to start:" \\
                 --column "Code" --column "Environment" \\
-                "1" "Silicon Graphics : IRIX 5.3 (MAME)" \\
-                "2" "Silicon Graphics : IRIX 6.5 (MAME)" \\
-                "3" "Apple : Mac OS X 10 (QEMU/KVM)" \\
-                "4" "Exit" \\
-                --width=500 --height=280 --hide-column=1 --window-icon=info \\
-                --cancel-label="Cancel")
+                "1" "Silicon Graphics : IRIX 6.5 (MAME indy_4610)" \\
+                "2" "Apple : Mac OS X 10 (QEMU/KVM)" \\
+                "3" "Exit" \\
+                --width=500 --height=280 --hide-column=1)
 
 case "\$CHOICE" in
-    1) /usr/games/mame indy_4613 -sound alsa -hard1 $REAL_HOMEDIR/.mame/chd/irix53.chd -fullscreen ;;
-    2) /usr/games/mame indy_4613 -sound alsa -hard1 $REAL_HOMEDIR/.mame/chd/irix65.chd -fullscreen ;;
-    3) 
+    1) 
+        # Lancement avec la rom indy_4610
+        /usr/games/mame indy_4610 -sound alsa -hard1 "$REAL_HOMEDIR/.mame/chd/irix65.chd" 
+        ;;
+    2) 
         if [ -f "$REAL_HOMEDIR/.macvm/OpenCore.qcow2" ]; then
             qemu-system-x86_64 -enable-kvm -m 8192 -smp 4 -machine q35 -cpu host \\
                 -device VGA,vgamem_mb=128 \\
@@ -121,18 +130,17 @@ case "\$CHOICE" in
                 -usb -device usb-kbd -device usb-tablet \\
                 -display gtk,zoom-to-fit=on -full-screen
         else
-            zenity --error --center --text="The Mac virtual machine is not configured.\nPlease place the disk images in the .macvm folder."
+            zenity --error --text="The Mac virtual machine is not configured.\nPlease place the disk images in the .macvm folder."
         fi
         ;;
     *) exit 0 ;;
 esac
 
-# Re-enable the screen blanking (5 minutes) after closing the emulator
 gsettings set org.gnome.desktop.session idle-delay 300 2>/dev/null || true
 EOF
 chmod +x "$REAL_HOMEDIR/system-launcher.sh"
 
-echo "=== 8. Creating GNOME Desktop Shortcut ==="
+echo "=== 9. Creating GNOME Desktop Shortcut ==="
 cat << EOF > "$REAL_HOMEDIR/.local/share/applications/sgi-launcher.desktop"
 [Desktop Entry]
 Version=1.0
@@ -145,28 +153,24 @@ Type=Application
 Categories=Utility;
 EOF
 
-# Copying shortcut to desktop (Handling both French and English defaults)
 cp "$REAL_HOMEDIR/.local/share/applications/sgi-launcher.desktop" "$REAL_HOMEDIR/Bureau/" 2>/dev/null || true
 cp "$REAL_HOMEDIR/.local/share/applications/sgi-launcher.desktop" "$REAL_HOMEDIR/Desktop/" 2>/dev/null || true
 
-# Authorizing desktop execution for GNOME security compliance
 chmod +x "$REAL_HOMEDIR"/Bureau/*.desktop 2>/dev/null || true
 chmod +x "$REAL_HOMEDIR"/Desktop/*.desktop 2>/dev/null || true
 gio set "$REAL_HOMEDIR/Bureau/sgi-launcher.desktop" metadata::trusted true 2>/dev/null || true
 gio set "$REAL_HOMEDIR/Desktop/sgi-launcher.desktop" metadata::trusted true 2>/dev/null || true
 
-echo "=== 9. Configuring RDP Bridge (xrdp) ==="
-# Ensure RDP sessions load the GNOME desktop properly
+echo "=== 10. Configuring RDP Bridge (xrdp) ==="
 echo "gnome-session" > "$REAL_HOMEDIR/.xsession"
 
-echo "=== 10. Applying File Ownership ==="
+echo "=== 11. Applying File Ownership ==="
 chown -R "$REAL_USER:$REAL_USER" "$REAL_HOMEDIR"
 
 echo "=========================================================="
 echo " CONFIGURATION COMPLETED SUCCESSFULLY                     "
 echo "=========================================================="
 echo "A 'System Launcher' icon is now available on the user's desktop."
-echo "If GNOME prompts you, right-click the icon and select 'Allow Launching'."
 echo ""
 read -r -p "Do you want to reboot the system now? (y/n): " REBOOT_CHOICE
 
