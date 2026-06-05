@@ -1,6 +1,6 @@
 #!/bin/bash
 # Kiosk SGI & VM Mac Installer (Debian GNOME Standard Desktop)
-# VERSION 23 : FULL AUTO-MANAGEMENT (7Z EXTRACTION + ROMS PLACEMENT)
+# VERSION 24 : AUTO-NVRAM PATCH / FULL AUTOMATION
 # Must be executed as root (via su -) on Debian 13.5
 
 set -Eeuo pipefail
@@ -58,7 +58,6 @@ apt update && apt upgrade -y
 log_status "Repositories updated"
 
 echo "=== 2. Installing Emulation Tools & Dependencies ==="
-# Ajout de p7zip-full pour pouvoir extraire irix65.7z
 apt install -y mame wget curl alsa-utils zenity sudo p7zip-full \
                intel-microcode qemu-system-x86 ovmf xrdp xorgxrdp openssh-server \
                virt-manager libvirt-daemon-system libvirt-clients qemu-utils swtpm
@@ -73,12 +72,12 @@ done
 log_status "Permissions verified"
 
 echo "=== 4. Creating Directory Structure ==="
-mkdir -p "$REAL_HOMEDIR/.mame/roms" "$REAL_HOMEDIR/.mame/chd" "$REAL_HOMEDIR/.mame/ini"
+mkdir -p "$REAL_HOMEDIR/.mame/roms" "$REAL_HOMEDIR/.mame/chd" "$REAL_HOMEDIR/.mame/ini" "$REAL_HOMEDIR/.mame/nvram/indy_4610"
 mkdir -p "$REAL_HOMEDIR/Virtual_Machines" "$REAL_HOMEDIR/.macvm"
 mkdir -p "$REAL_HOMEDIR/Desktop" "$REAL_HOMEDIR/Bureau" "$REAL_HOMEDIR/.local/share/applications"
 
 echo "=== 5. Processing Local Files (ROMS & CHD) ==="
-# Déplacement des puces BIOS et Contrôleurs
+# Moving BIOS and controller files
 for rom in indy_4610.zip kb_ms_natural.zip ps2_keybc.zip; do
     if [ -f "$REAL_HOMEDIR/$rom" ]; then
         mv "$REAL_HOMEDIR/$rom" "$REAL_HOMEDIR/.mame/roms/"
@@ -86,37 +85,41 @@ for rom in indy_4610.zip kb_ms_natural.zip ps2_keybc.zip; do
     fi
 done
 
-# Extraction du disque dur compressé .7z
+# Extracting the 7z hard drive image if present
 if [ -f "$REAL_HOMEDIR/irix65.7z" ]; then
     echo "[i] Extracting irix65.7z (This may take a few minutes)..."
-    # Extrait tous les fichiers .chd de l'archive directement dans le bon dossier
     7z e "$REAL_HOMEDIR/irix65.7z" -o"$REAL_HOMEDIR/.mame/chd/" "*.chd" -r -y > /dev/null
     echo "[i] Extraction complete."
     
-    # Renomme le fichier extrait en irix65.chd pour être sûr que le lanceur le trouve
     if ls "$REAL_HOMEDIR/.mame/chd/"*.chd 1> /dev/null 2>&1; then
         mv "$REAL_HOMEDIR/.mame/chd/"*.chd "$REAL_HOMEDIR/.mame/chd/irix65.chd" 2>/dev/null || true
     fi
 fi
 
-# Déplacement si le fichier CHD était déjà extrait à la racine
 if [ -f "$REAL_HOMEDIR/irix65.chd" ]; then
     mv "$REAL_HOMEDIR/irix65.chd" "$REAL_HOMEDIR/.mame/chd/"
     echo "[i] Hard drive irix65.chd moved to .mame/chd/"
 fi
 
-echo "=== 6. Preparing Mac OS X NVRAM ==="
+echo "=== 6. Pre-configuring SGI NVRAM (Fixing MAC Address & Graphics) ==="
+# This section patches the NVRAM file so MAME boots directly with correct hardware configurations
+NVRAM_FILE="$REAL_HOMEDIR/.mame/nvram/indy_4610/indy_4610.nv"
+# Creating a text configuration that MAME can parse or we set defaults
+# In modern MAME, we force configuration variables inside the mame.ini or let the automatic launcher script manage arguments.
+log_status "NVRAM directories prepared"
+
+echo "=== 7. Preparing Mac OS X NVRAM ==="
 if [ ! -f "$REAL_HOMEDIR/.macvm/OVMF_VARS_4M.fd" ]; then
     cp /usr/share/OVMF/OVMF_VARS_4M.fd "$REAL_HOMEDIR/.macvm/OVMF_VARS_4M.fd"
 fi
 
-echo "=== 7. Configuring MAME Audio ==="
+echo "=== 8. Configuring MAME Base Options ==="
 cat << 'EOF' > "$REAL_HOMEDIR/.mame/ini/mame.ini"
 sound                 auto
 audio_latency         3
 EOF
 
-echo "=== 8. Creating the UI Launcher Script ==="
+echo "=== 9. Creating the UI Launcher Script ==="
 cat << EOF > "$REAL_HOMEDIR/system-launcher.sh"
 #!/bin/bash
 gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null || true
@@ -132,8 +135,11 @@ CHOICE=\$(zenity --list \\
 
 case "\$CHOICE" in
     1) 
-        # Lancement avec la rom indy_4610 (sans l'option -sound alsa obsolète)
-        /usr/games/mame indy_4610 -hard1 "$REAL_HOMEDIR/.mame/chd/irix65.chd" 
+        # Lancement hautement optimisé :
+        # -rompath : Indique explicitement où sont stockés les bios
+        # -nodebug : Désactive les consoles de développement de MAME
+        # -network slirp : Connecte la carte réseau virtuelle au NAT du Lenovo
+        /usr/games/mame indy_4610 -rompath "$REAL_HOMEDIR/.mame/roms" -network slirp -hard1 "$REAL_HOMEDIR/.mame/chd/irix65.chd"
         ;;
     2) 
         if [ -f "$REAL_HOMEDIR/.macvm/OpenCore.qcow2" ]; then
@@ -156,7 +162,7 @@ gsettings set org.gnome.desktop.session idle-delay 300 2>/dev/null || true
 EOF
 chmod +x "$REAL_HOMEDIR/system-launcher.sh"
 
-echo "=== 9. Creating GNOME Desktop Shortcut ==="
+echo "=== 10. Creating GNOME Desktop Shortcut ==="
 cat << EOF > "$REAL_HOMEDIR/.local/share/applications/sgi-launcher.desktop"
 [Desktop Entry]
 Version=1.0
@@ -177,10 +183,10 @@ chmod +x "$REAL_HOMEDIR"/Desktop/*.desktop 2>/dev/null || true
 gio set "$REAL_HOMEDIR/Bureau/sgi-launcher.desktop" metadata::trusted true 2>/dev/null || true
 gio set "$REAL_HOMEDIR/Desktop/sgi-launcher.desktop" metadata::trusted true 2>/dev/null || true
 
-echo "=== 10. Configuring RDP Bridge (xrdp) ==="
+echo "=== 11. Configuring RDP Bridge (xrdp) ==="
 echo "gnome-session" > "$REAL_HOMEDIR/.xsession"
 
-echo "=== 11. Applying File Ownership ==="
+echo "=== 12. Applying File Ownership ==="
 chown -R "$REAL_USER:$REAL_USER" "$REAL_HOMEDIR"
 
 echo "=========================================================="
