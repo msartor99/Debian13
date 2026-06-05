@@ -1,4 +1,10 @@
 # Debian13
 use Debian 13.5 and configure Workstation spécial
 
-# new script to install mama emulator for IRIX 5.3 and 6.
+# new script to install mame emulator for IRIX 5.3 and 6.
+
+download file: install_mame.sh
+
+make it executable : chmod +x install_mame.sh
+
+run it ./install_mame.sh
