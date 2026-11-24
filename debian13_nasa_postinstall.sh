@@ -2,7 +2,9 @@
 set -euo pipefail
 
 # --- CONFIGURATION ---
-TARGET_USER="msartor"
+# Automatically detect the primary user created during installation (UID 1000)
+TARGET_USER=$(id -un 1000 2>/dev/null || true)
+
 REPO_URL="https://githubusercontent.com"
 THEME_NAME="nasa-theme"
 SDDM_THEME_DIR="/usr/share/sddm/themes/$THEME_NAME"
@@ -129,21 +131,31 @@ if [ -f /usr/share/sddm/scripts/Xsetup ]; then
     chmod +x /usr/share/sddm/scripts/Xsetup
 fi
 
-echo "=== 8. Applying Plasma 6 video wallpaper (if graphical session is active) ==="
-if id "$TARGET_USER" >/dev/null 2>&1; then
-    USER_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
-    mkdir -p "$USER_HOME/Videos/Wallpapers"
-    cp -f "$VIDEO_FILE" "$USER_HOME/Videos/Wallpapers/earth_nasa.mp4"
-    chown -R "$TARGET_USER:$TARGET_USER" "$USER_HOME/Videos"
+echo "=== 8. Applying Plasma 6 video wallpaper for primary user (UID 1000) ==="
+if [ -n "$TARGET_USER" ] && id "$TARGET_USER" >/dev/null 2>&1; then
+    echo "Detected primary user: $TARGET_USER (UID 1000)"
+    USER_HOME=$(getent passwd 1000 | cut -d: -f6)
+    
+    # Support both English (Videos) and French (Vidéos) XDG user directories
+    if [ -d "$USER_HOME/Vidéos" ]; then
+        TARGET_VIDEO_DIR="$USER_HOME/Vidéos/Wallpapers"
+    else
+        TARGET_VIDEO_DIR="$USER_HOME/Videos/Wallpapers"
+    fi
 
-    USER_UID=$(id -u "$TARGET_USER")
-    DBUS_SOCK="/run/user/$USER_UID/bus"
+    mkdir -p "$TARGET_VIDEO_DIR"
+    cp -f "$VIDEO_FILE" "$TARGET_VIDEO_DIR/earth_nasa.mp4"
+    chown -R 1000:1000 "$TARGET_VIDEO_DIR"
+
+    DBUS_SOCK="/run/user/1000/bus"
     if [ -S "$DBUS_SOCK" ] && [ -s "$VIDEO_FILE" ]; then
         su - "$TARGET_USER" -c "DBUS_SESSION_BUS_ADDRESS=unix:path=$DBUS_SOCK plasma-apply-wallpaperimage --plugin '$VIDEO_PLUGIN_ID' '$VIDEO_FILE'" || true
         echo "Plasma 6 video wallpaper applied for $TARGET_USER."
     else
-        echo "No active graphical session for $TARGET_USER: video saved to $WALLPAPER_DIR/earth_nasa.mp4."
+        echo "No active graphical session for $TARGET_USER: video saved to $TARGET_VIDEO_DIR/earth_nasa.mp4."
     fi
+else
+    echo "Warning: No user with UID 1000 found. Skipping user-level wallpaper setup."
 fi
 
 echo "=== Done! Please reboot your system to load the kernel and NVIDIA drivers. ==="
