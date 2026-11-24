@@ -1,0 +1,153 @@
+cat <<'EOF' > /root/debian13_nasa_postinstall.sh
+#!/bin/bash
+set -euo pipefail
+
+# --- PARAMÈTRES ---
+TARGET_USER="msartor"
+REPO_URL="https://githubusercontent.com"
+THEME_NAME="nasa-theme"
+SDDM_THEME_DIR="/usr/share/sddm/themes/$THEME_NAME"
+WALLPAPER_DIR="/usr/share/wallpapers/NASA"
+VIDEO_URL="https://file-examples.com"
+VIDEO_FILE="$WALLPAPER_DIR/earth_nasa.mp4"
+VIDEO_PLUGIN_REPO="https://github.com"
+VIDEO_PLUGIN_ID="luisbocanegra.smart.video.wallpaper.reborn"
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Erreur : Ce script doit être exécuté en tant que root." >&2
+    exit 1
+fi
+
+echo "=== 1. Activation des dépôts contrib / non-free ==="
+if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+    sed -i -E 's/^Components:.*$/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources
+elif [ -f /etc/apt/sources.list ]; then
+    sed -i -E 's/\bmain\b.*/main contrib non-free non-free-firmware/' /etc/apt/sources.list
+fi
+
+echo "=== 2. Mise à jour et installation des outils et codecs multimédias Qt6 ==="
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get full-upgrade -y
+apt-get install -y curl git net-tools x11-xkb-utils xserver-xorg locales \
+    qml6-module-qtmultimedia gstreamer1.0-libav gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+
+echo "=== 3. Installation et configuration NVIDIA (RTX 2060 + Wayland Plasma 6) ==="
+if lspci | grep -qi "NVIDIA"; then
+    apt-get install -y linux-headers-amd64 build-essential dkms
+    apt-get install -y nvidia-kernel-dkms nvidia-driver firmware-misc-nonfree
+
+    # Activation DRM KMS (indispensable pour Plasma 6 sous Wayland)
+    echo "options nvidia-drm modeset=1 fbdev=1" > /etc/modprobe.d/nvidia-drm.conf
+
+    # Conservation de la mémoire vidéo lors de la veille sous Wayland
+    echo "options nvidia NVreg_PreserveVideoMemoryAllocations=1" > /etc/modprobe.d/nvidia-power.conf
+    systemctl enable nvidia-suspend.service nvidia-hibernate.service nvidia-resume.service 2>/dev/null || true
+
+    # Mise à jour de l'initramfs pour appliquer les options au démarrage
+    update-initramfs -u
+else
+    echo "Aucune carte NVIDIA détectée, étape ignorée."
+fi
+
+echo "=== 4. Configuration de la langue (fr_CH.UTF-8) et du clavier Suisse romand ==="
+sed -i 's/^# *\(fr_CH.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+locale-gen
+update-locale LANG=fr_CH.UTF-8
+
+cat <<KBD > /etc/default/keyboard
+XKBMODEL="pc105"
+XKBLAYOUT="ch"
+XKBVARIANT="fr"
+XKBOPTIONS=""
+BACKSPACE="guess"
+KBD
+
+mkdir -p /etc/X11/xorg.conf.d
+cat <<XORG > /etc/X11/xorg.conf.d/00-keyboard.conf
+Section "InputClass"
+        Identifier "system-keyboard"
+        MatchIsKeyboard "on"
+        Option "XkbLayout" "ch"
+        Option "XkbModel" "pc105"
+        Option "XkbVariant" "fr"
+EndSection
+XORG
+
+udevadm trigger --subsystem-match=input --action=change || true
+
+echo "=== 5. Téléchargement du thème NASA SDDM et de la vidéo Terre ==="
+mkdir -p "$SDDM_THEME_DIR" "$WALLPAPER_DIR"
+
+for file in Main.qml theme.conf metadata.desktop nasa1920.png nasa2560login.jpg nasa2560login.png; do
+    curl -fsSL "$REPO_URL/$file" -o "$SDDM_THEME_DIR/$file" || echo "Fichier optionnel ignoré : $file"
+done
+
+# Adaptation Qt6 du thème SDDM
+if [ -f "$SDDM_THEME_DIR/metadata.desktop" ] && ! grep -q "^QtVersion=" "$SDDM_THEME_DIR/metadata.desktop"; then
+    echo "QtVersion=6" >> "$SDDM_THEME_DIR/metadata.desktop"
+fi
+
+if [ -f "$SDDM_THEME_DIR/Main.qml" ]; then
+    sed -i 's/import QtQuick 2\.[0-9]*/import QtQuick/' "$SDDM_THEME_DIR/Main.qml"
+    sed -i 's/import QtQuick\.Controls 2\.[0-9]*/import QtQuick.Controls/' "$SDDM_THEME_DIR/Main.qml"
+fi
+
+# Copie des images fixes de secours
+cp -f "$SDDM_THEME_DIR/nasa1920.png" "$WALLPAPER_DIR/" 2>/dev/null || true
+cp -f "$SDDM_THEME_DIR/nasa2560login.jpg" "$WALLPAPER_DIR/" 2>/dev/null || true
+
+# Téléchargement idempotent de la vidéo de la Terre qui tourne
+if [ ! -s "$VIDEO_FILE" ]; then
+    echo "Téléchargement de la vidéo de la Terre..."
+    curl -fsSL "$VIDEO_URL" -o "$VIDEO_FILE"
+fi
+
+echo "=== 6. Installation système du plugin Smart Video Wallpaper Reborn (Plasma 6) ==="
+rm -rf /tmp/smart-video
+git clone --depth 1 "$VIDEO_PLUGIN_REPO" /tmp/smart-video
+if [ -d "/usr/share/plasma/wallpapers/$VIDEO_PLUGIN_ID" ]; then
+    kpackagetool6 --global -t Plasma/Wallpaper -u /tmp/smart-video || true
+else
+    kpackagetool6 --global -t Plasma/Wallpaper -i /tmp/smart-video
+fi
+rm -rf /tmp/smart-video
+
+echo "=== 7. Configuration de SDDM (Thème NASA, X11, sans clavier virtuel, clavier CH) ==="
+mkdir -p /etc/sddm.conf.d
+cat <<SDDM > /etc/sddm.conf.d/zz-nasa-override.conf
+[General]
+DisplayServer=x11
+InputMethod=
+
+[Theme]
+Current=$THEME_NAME
+SDDM
+
+if [ -f /usr/share/sddm/scripts/Xsetup ]; then
+    sed -i '/setxkbmap/d' /usr/share/sddm/scripts/Xsetup
+    echo "setxkbmap -layout ch -variant fr" >> /usr/share/sddm/scripts/Xsetup
+    chmod +x /usr/share/sddm/scripts/Xsetup
+fi
+
+echo "=== 8. Application du fond d'écran vidéo Plasma 6 (si session active) ==="
+if id "$TARGET_USER" >/dev/null 2>&1; then
+    USER_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+    mkdir -p "$USER_HOME/Vidéos/Wallpapers"
+    cp -f "$VIDEO_FILE" "$USER_HOME/Vidéos/Wallpapers/earth_nasa.mp4"
+    chown -R "$TARGET_USER:$TARGET_USER" "$USER_HOME/Vidéos/Wallpapers"
+
+    USER_UID=$(id -u "$TARGET_USER")
+    DBUS_SOCK="/run/user/$USER_UID/bus"
+    if [ -S "$DBUS_SOCK" ] && [ -s "$VIDEO_FILE" ]; then
+        su - "$TARGET_USER" -c "DBUS_SESSION_BUS_ADDRESS=unix:path=$DBUS_SOCK plasma-apply-wallpaperimage --plugin '$VIDEO_PLUGIN_ID' '$VIDEO_FILE'" || true
+        echo "Fond d'écran vidéo Plasma 6 appliqué pour $TARGET_USER."
+    else
+        echo "Session graphique fermée : la vidéo est prête dans /usr/share/wallpapers/NASA/earth_nasa.mp4."
+    fi
+fi
+
+echo "=== Terminé ! Redémarrez le système (reboot) si le noyau ou le pilote NVIDIA vient d'être installé. ==="
+EOF
+
+chmod +x /root/debian13_nasa_postinstall.sh
